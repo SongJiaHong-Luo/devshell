@@ -4,7 +4,7 @@ icon: build/icon.ico
 publish:
   provider: github
   owner: SongJiaHong-Luo
-  repo: devshell-releases
+  repo: devshell
 directories:
   buildResources: build
   output: dist
