@@ -1,0 +1,620 @@
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useServerStore } from '@/stores/server-store'
+import { useSessionStore } from '@/stores/session-store'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import {
+  FolderOpen,
+  Server,
+  Box,
+  ChevronRight,
+  ChevronDown,
+  Plus,
+  Search,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Download,
+  Upload,
+  Wifi,
+  Link,
+  Folders,
+  Shield
+} from 'lucide-react'
+import { ProjectDialog } from './project-dialog'
+import { ServerDialog } from './server-dialog'
+import { ContainerDialog } from './container-dialog'
+import { ConfirmDialog } from './confirm-dialog'
+import { GroupDialog } from './group-dialog'
+import type { Project, Server as ServerType, Container, Group } from '@shared/types/server'
+
+export function ServerSidebar(): JSX.Element {
+  const { t } = useTranslation()
+  const {
+    projects,
+    searchQuery,
+    expandedIds,
+    selectedId,
+    setSearchQuery,
+    toggleExpanded,
+    setSelected,
+    fetchProjects,
+    deleteProject,
+    deleteServer,
+    deleteContainer,
+    deleteGroup,
+    importConfig,
+    exportConfig
+  } = useServerStore()
+  const { openSession } = useSessionStore()
+
+  const [projectDialog, setProjectDialog] = useState<{ open: boolean; project?: Project }>({
+    open: false
+  })
+  const [serverDialog, setServerDialog] = useState<{
+    open: boolean
+    projectId: string
+    groupId?: string
+    server?: ServerType
+  }>({ open: false, projectId: '' })
+  const [containerDialog, setContainerDialog] = useState<{
+    open: boolean
+    projectId: string
+    serverId: string
+    container?: Container
+  }>({ open: false, projectId: '', serverId: '' })
+  const [groupDialog, setGroupDialog] = useState<{
+    open: boolean
+    projectId: string
+    parentGroupId?: string
+    group?: Group
+  }>({ open: false, projectId: '' })
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    description: string
+    onConfirm: () => void
+  }>({ open: false, title: '', description: '', onConfirm: () => {} })
+
+  const MIN_WIDTH = 200
+  const MAX_WIDTH = 500
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('devshell-sidebar-width')
+    return saved ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parseInt(saved))) : 256
+  })
+  const isDraggingRef = useRef(false)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isDraggingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, ev.clientX))
+      setSidebarWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      isDraggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setSidebarWidth((w) => {
+        localStorage.setItem('devshell-sidebar-width', String(w))
+        return w
+      })
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }, [])
+
+  useEffect(() => {
+    fetchProjects()
+  }, [])
+
+  interface FilterResult {
+    project: Project
+    matchedGroupPaths: Set<string>
+  }
+
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery.trim()) return projects
+
+    const q = searchQuery.toLowerCase()
+    const results: FilterResult[] = []
+
+    const searchInGroup = (group: Group, pathPrefix: string): {
+      matchedGroup: Group | null
+      matchedPaths: Set<string>
+    } => {
+      const currentPath = pathPrefix + group.name
+      const groupMatch = group.name.toLowerCase().includes(q)
+      const matchedPaths = new Set<string>()
+
+      const filteredServers = group.servers.filter((s) => {
+        const serverMatch = s.name.toLowerCase().includes(q) || s.host.toLowerCase().includes(q)
+        const containerMatch = s.containers.some(
+          (c) => c.name.toLowerCase().includes(q) || c.image.toLowerCase().includes(q)
+        )
+        return serverMatch || containerMatch
+      })
+
+      const subGroupResults = group.groups.map((g) => searchInGroup(g, currentPath + '/'))
+      const filteredSubGroups = subGroupResults
+        .filter((r) => r.matchedGroup !== null)
+        .map((r) => r.matchedGroup as Group)
+
+      subGroupResults.forEach((r) => {
+        r.matchedPaths.forEach((p) => matchedPaths.add(p))
+      })
+
+      if (groupMatch || filteredServers.length > 0 || filteredSubGroups.length > 0) {
+        matchedPaths.add(currentPath)
+        return {
+          matchedGroup: {
+            ...group,
+            servers: groupMatch ? group.servers : filteredServers,
+            groups: filteredSubGroups
+          },
+          matchedPaths
+        }
+      }
+
+      return { matchedGroup: null, matchedPaths: new Set() }
+    }
+
+    projects.forEach((p) => {
+      const projectMatch = p.name.toLowerCase().includes(q)
+      const matchedPaths = new Set<string>()
+
+      const filteredServers = p.servers.filter((s) => {
+        const serverMatch = s.name.toLowerCase().includes(q) || s.host.toLowerCase().includes(q)
+        const containerMatch = s.containers.some(
+          (c) => c.name.toLowerCase().includes(q) || c.image.toLowerCase().includes(q)
+        )
+        return serverMatch || containerMatch
+      })
+
+      const groupResults = p.groups.map((g) => searchInGroup(g, ''))
+      const filteredGroups = groupResults
+        .filter((r) => r.matchedGroup !== null)
+        .map((r) => r.matchedGroup as Group)
+
+      groupResults.forEach((r) => {
+        r.matchedPaths.forEach((path) => matchedPaths.add(path))
+      })
+
+      if (projectMatch || filteredServers.length > 0 || filteredGroups.length > 0) {
+        results.push({
+          project: {
+            ...p,
+            servers: projectMatch ? p.servers : filteredServers,
+            groups: filteredGroups
+          },
+          matchedGroupPaths: matchedPaths
+        })
+      }
+    })
+
+    return results.map((r) => r.project)
+  }, [projects, searchQuery])
+
+  const handleDelete = (titleKey: string, name: string, fn: () => void) => {
+    setConfirmDialog({
+      open: true,
+      title: t('sidebar.deleteTitle', { title: t(titleKey) }),
+      description: t('sidebar.deleteConfirm', { name }),
+      onConfirm: fn
+    })
+  }
+
+  return (
+    <div
+      className="border-r border-border bg-card flex flex-col h-full relative shrink-0"
+      style={{ width: sidebarWidth }}
+    >
+      <div
+        className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 z-20 transition-colors"
+        onMouseDown={handleMouseDown}
+      />
+      <div className="p-3 border-b border-border space-y-2">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={t('common.search')}
+              className="pl-8 h-9"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0">
+                <Plus className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setProjectDialog({ open: true })}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('sidebar.newProject')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => importConfig()}>
+                <Upload className="mr-2 h-4 w-4" />
+                {t('sidebar.importConfig')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => exportConfig()}>
+                <Download className="mr-2 h-4 w-4" />
+                {t('sidebar.exportConfig')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1">
+        <div className="p-2">
+          {filteredProjects.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-sm text-muted-foreground mb-2">
+                {searchQuery ? t('sidebar.noResults') : t('sidebar.noProjects')}
+              </p>
+              {!searchQuery && (
+                <Button variant="outline" size="sm" onClick={() => setProjectDialog({ open: true })}>
+                  <Plus className="mr-1 h-3 w-3" />
+                  {t('sidebar.createProject')}
+                </Button>
+              )}
+            </div>
+          ) : (
+            filteredProjects.map((project) => (
+              <ProjectNode
+                key={project.id}
+                project={project}
+                expandedIds={expandedIds}
+                selectedId={selectedId}
+                onToggle={toggleExpanded}
+                onSelect={setSelected}
+                onConnectServer={(s, groupPath) => openSession(s, groupPath)}
+                onEditProject={(p) => setProjectDialog({ open: true, project: p })}
+                onDeleteProject={(p) => handleDelete('sidebar.project', p.name, () => deleteProject(p.id))}
+                onAddGroup={(p, parentGid) => setGroupDialog({ open: true, projectId: p.id, parentGroupId: parentGid })}
+                onEditGroup={(p, parentGid, g) => setGroupDialog({ open: true, projectId: p.id, parentGroupId: parentGid, group: g })}
+                onDeleteGroup={(p, gid, cascade) => handleDelete('sidebar.group', '', () => deleteGroup(p.id, gid, cascade))}
+                onAddServer={(p, gid) => setServerDialog({ open: true, projectId: p.id, groupId: gid })}
+                onEditServer={(p, s) =>
+                  setServerDialog({ open: true, projectId: p.id, server: s })
+                }
+                onDeleteServer={(p, s) =>
+                  handleDelete('sidebar.server', s.name, () => deleteServer(p.id, s.id))
+                }
+                onAddContainer={(p, s) =>
+                  setContainerDialog({ open: true, projectId: p.id, serverId: s.id })
+                }
+                onEditContainer={(p, s, c) =>
+                  setContainerDialog({
+                    open: true,
+                    projectId: p.id,
+                    serverId: s.id,
+                    container: c
+                  })
+                }
+                onDeleteContainer={(p, s, c) =>
+                  handleDelete('sidebar.container', c.name, () => deleteContainer(p.id, s.id, c.id))
+                }
+              />
+            ))
+          )}
+        </div>
+      </ScrollArea>
+
+      <ProjectDialog
+        open={projectDialog.open}
+        project={projectDialog.project}
+        onOpenChange={(open) => setProjectDialog({ open })}
+      />
+      <ServerDialog
+        open={serverDialog.open}
+        projectId={serverDialog.projectId}
+        groupId={serverDialog.groupId}
+        server={serverDialog.server}
+        onOpenChange={(open) => setServerDialog({ open, projectId: '' })}
+      />
+      <ContainerDialog
+        open={containerDialog.open}
+        projectId={containerDialog.projectId}
+        serverId={containerDialog.serverId}
+        container={containerDialog.container}
+        onOpenChange={(open) =>
+          setContainerDialog({ open, projectId: '', serverId: '' })
+        }
+      />
+      <GroupDialog
+        open={groupDialog.open}
+        projectId={groupDialog.projectId}
+        parentGroupId={groupDialog.parentGroupId}
+        group={groupDialog.group}
+        onOpenChange={(open) =>
+          setGroupDialog({ open, projectId: '' })
+        }
+      />
+      <ConfirmDialog
+        open={confirmDialog.open}
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        onConfirm={confirmDialog.onConfirm}
+        onOpenChange={(open) =>
+          setConfirmDialog((prev) => ({ ...prev, open }))
+        }
+      />
+    </div>
+  )
+}
+
+interface GroupNodeProps {
+  project: Project
+  group: Group
+  parentGroupId?: string
+  expandedIds: Set<string>
+  selectedId: string | null
+  groupPath: string[]
+  onToggle: (id: string) => void
+  onSelect: (id: string) => void
+  onConnectServer: (server: ServerType, groupPath: string[]) => void
+  onEditGroup: (project: Project, parentGroupId: string | undefined, group: Group) => void
+  onDeleteGroup: (project: Project, groupId: string, cascade: boolean) => void
+  onAddSubGroup: (project: Project, parentGroupId: string) => void
+  onAddServer: (project: Project, groupId: string) => void
+  onEditServer: (project: Project, server: ServerType) => void
+  onDeleteServer: (project: Project, server: ServerType) => void
+  onAddContainer: (project: Project, server: ServerType) => void
+  onEditContainer: (project: Project, server: ServerType, container: Container) => void
+  onDeleteContainer: (project: Project, server: ServerType, container: Container) => void
+}
+
+function GroupNode({
+  project,
+  group,
+  parentGroupId,
+  expandedIds,
+  selectedId,
+  groupPath,
+  onToggle,
+  onSelect,
+  onConnectServer,
+  onEditGroup,
+  onDeleteGroup,
+  onAddSubGroup,
+  onAddServer,
+  onEditServer,
+  onDeleteServer,
+  onAddContainer,
+  onEditContainer,
+  onDeleteContainer
+}: GroupNodeProps): JSX.Element {
+  const { t } = useTranslation()
+  const isExpanded = expandedIds.has(group.id)
+  const currentGroupPath = [...groupPath, group.name]
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1 py-1 px-2 rounded hover:bg-accent cursor-pointer group"
+        onClick={() => onToggle(group.id)}
+      >
+        <button className="p-0.5 shrink-0" onClick={(e) => {
+          e.stopPropagation()
+          onToggle(group.id)
+        }}>
+          {isExpanded ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </button>
+        <Folders className="h-4 w-4 text-muted-foreground shrink-0" />
+        {group.bastion && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
+        <span className="text-sm flex-1 truncate">{group.name}</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
+            >
+              <MoreVertical className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => onEditGroup(project, parentGroupId, group)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              {t('sidebar.editGroup')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onAddSubGroup(project, group.id)}>
+              <Folders className="mr-2 h-4 w-4" />
+              {t('sidebar.addSubGroup')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onAddServer(project, group.id)}>
+              <Server className="mr-2 h-4 w-4" />
+              {t('sidebar.addServer')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onDeleteGroup(project, group.id, false)}>
+              <Link className="mr-2 h-4 w-4" />
+              {t('sidebar.dissolveGroup')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onDeleteGroup(project, group.id, true)}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              {t('sidebar.deleteGroup')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {isExpanded && (
+        <div className="ml-4">
+          {group.groups.map((subGroup) => (
+            <GroupNode
+              key={subGroup.id}
+              project={project}
+              group={subGroup}
+              parentGroupId={group.id}
+              expandedIds={expandedIds}
+              selectedId={selectedId}
+              groupPath={currentGroupPath}
+              onToggle={onToggle}
+              onSelect={onSelect}
+              onConnectServer={onConnectServer}
+              onEditGroup={onEditGroup}
+              onDeleteGroup={onDeleteGroup}
+              onAddSubGroup={onAddSubGroup}
+              onAddServer={onAddServer}
+              onEditServer={onEditServer}
+              onDeleteServer={onDeleteServer}
+              onAddContainer={onAddContainer}
+              onEditContainer={onEditContainer}
+              onDeleteContainer={onDeleteContainer}
+            />
+          ))}
+          {group.servers.map((server) => (
+            <ServerNode
+              key={server.id}
+              project={project}
+              server={server}
+              groupPath={currentGroupPath}
+              expandedIds={expandedIds}
+              selectedId={selectedId}
+              onToggle={onToggle}
+              onSelect={onSelect}
+              onConnectServer={onConnectServer}
+              onEditServer={onEditServer}
+              onDeleteServer={onDeleteServer}
+              onAddContainer={onAddContainer}
+              onEditContainer={onEditContainer}
+              onDeleteContainer={onDeleteContainer}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface ProjectNodeProps {
+  project: Project
+  expandedIds: Set<string>
+  selectedId: string | null
+  onToggle: (id: string) => void
+  onSelect: (id: string) => void
+  onConnectServer: (server: ServerType, groupPath: string[]) => void
+  onEditProject: (project: Project) => void
+  onDeleteProject: (project: Project) => void
+  onAddGroup: (project: Project, parentGroupId?: string) => void
+  onEditGroup: (project: Project, parentGroupId: string | undefined, group: Group) => void
+  onDeleteGroup: (project: Project, groupId: string, cascade: boolean) => void
+  onAddServer: (project: Project, groupId?: string) => void
+  onEditServer: (project: Project, server: ServerType) => void
+  onDeleteServer: (project: Project, server: ServerType) => void
+  onAddContainer: (project: Project, server: ServerType) => void
+  onEditContainer: (project: Project, server: ServerType, container: Container) => void
+  onDeleteContainer: (project: Project, server: ServerType, container: Container) => void
+}
+
+function ProjectNode({
+  project,
+  expandedIds,
+  selectedId,
+  onToggle,
+  onSelect,
+  onConnectServer,
+  onEditProject,
+  onDeleteProject,
+  onAddGroup,
+  onEditGroup,
+  onDeleteGroup,
+  onAddServer,
+  onEditServer,
+  onDeleteServer,
+  onAddContainer,
+  onEditContainer,
+  onDeleteContainer
+}: ProjectNodeProps): JSX.Element {
+  const { t } = useTranslation()
+  const isExpanded = expandedIds.has(project.id)
+
+  return (
+    <div className="mb-2">
+      <div
+        className="flex items-center gap-1 py-1 px-2 rounded hover:bg-accent cursor-pointer group"
+        onClick={() => onToggle(project.id)}
+      >
+        <button className="p-0.5 shrink-0" onClick={(e) => {
+          e.stopPropagation()
+          onToggle(project.id)
+        }}>
+          {isExpanded ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </button>
+        <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0" />
+        <span className="text-sm font-medium flex-1 truncate">{project.name}</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
+            >
+              <MoreVertical className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => onEditProject(project)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              {t('sidebar.editProject')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onAddGroup(project)}>
+              <Folders className="mr-2 h-4 w-4" />
+              {t('sidebar.addGroup')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onAddServer(project)}>
+              <Server className="mr-2 h-4 w-4" />
+              {t('sidebar.addServer')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onDeleteProject(project)}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              {t('sidebar.deleteProject')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {isExpanded && (
+
+
+
+
+
+
+
+
+
+
+

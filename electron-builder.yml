@@ -1,0 +1,39 @@
+appId: com.devshell.app
+productName: DevShell
+icon: build/icon.ico
+publish:
+  provider: github
+  owner: SongJiaHong-Luo
+  repo: devshell-releases
+directories:
+  buildResources: build
+  output: dist
+npmRebuild: false
+files:
+  - '!.release-token.local'
+  - '!**/.env*'
+  - '!scripts/**'
+  - '!.git/**'
+  - '!.claude/**'
+  - '!.build-cache/**'
+  - '!.build-home/**'
+  - '!.electron-gyp/**'
+  - '!.build-win.*.log'
+  - '!.agents/**'
+  - '!.planning/**'
+  - '!docs/**'
+  - '!CLAUDE.md'
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - resources/**
+win:
+  executableName: DevShell
+nsis:
+  artifactName: ${name}-${version}-Setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
